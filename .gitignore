@@ -1,0 +1,9 @@
+.pytest_cache/
+.venv/
+build
+**/__pycache__/
+*.egg-info/
+
+# exemple
+coco8
+mnist_data

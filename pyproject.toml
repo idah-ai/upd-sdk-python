@@ -1,0 +1,52 @@
+[build-system]
+requires      = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name        = "upd"
+version     = "0.1.0"
+description = "Python library for Universal Portable Dataset (UPD) files — CRUD and expressive queries over DuckDB-based AI/ML datasets."
+readme      = "README.md"
+license     = { text = "MIT" }
+requires-python = ">=3.14"
+
+keywords = ["dataset", "duckdb", "machine-learning", "annotation", "upd"]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+]
+
+dependencies = [
+    "duckdb>=1.4.4",
+    "ibis-framework[duckdb]>=12.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+examples = [
+    "torchvision",    # MNIST example
+    "ultralytics",    # COCO8 example
+]
+
+[project.urls]
+"Homepage"    = "https://github.com/your-org/upd"
+"Bug Tracker" = "https://github.com/your-org/upd/issues"
+
+[tool.setuptools.packages.find]
+include = ["upd*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts   = "-v"
+
+[tool.coverage.run]
+source = ["upd"]
