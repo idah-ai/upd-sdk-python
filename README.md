@@ -335,7 +335,7 @@ class Annotation:
 ## Querying
 
 Every repository inherits `_BaseRepository`, which delegates unknown attribute
-lookups to the underlying ibs table expression.
+lookups to the underlying ibis table expression.
 
 ```python
 with UPD.open("my_dataset.upd") as upd:

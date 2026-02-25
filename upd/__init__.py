@@ -21,13 +21,6 @@ Quick Start
         # Repositories are first-class query objects
         df = upd.entries.filter(upd.entries.dataset_id == ds.id).execute()
 
-        # Joins without .table
-        df = (
-            upd.entries
-               .join(upd.annotations, upd.entries.id == upd.annotations.entry_id)
-               .execute()
-        )
-
         # Row count
         print(len(upd.entries))
 """
@@ -42,7 +35,6 @@ from .annotation import AnnotationRepository, Annotation
 
 __all__ = [
     "UPD",
-    "UPDFile",          # backward compat
     "_BaseRepository",
     "MetadataRepository",
     "DatasetRepository",

@@ -94,3 +94,17 @@ class _BaseRepository:
         if name.startswith("_"):
             raise AttributeError(f"{type(self).__name__!r} has no attribute {name!r}")
         return getattr(self.table, name)
+
+    def insert(self, records: list[dict]) -> None:
+        """
+        Insert one or more rows via ibis and commit.
+
+        Parameters
+        ----------
+        records:
+            A list of dicts whose keys match the target table's columns.
+            All JSON/blob fields must already be serialised before calling
+            (e.g. dicts serialised via ``json_dumps``).
+        """
+        self._ibis.insert(self._table_name, records)
+        self._conn.commit()

@@ -74,15 +74,14 @@ class Annotation:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def _from_row(cls, row: tuple) -> "Annotation":
-        id_, entry_id, shape_type, shape_args, annotation, meta = row
+    def _from_record(cls, r: dict) -> "Annotation":
         return cls(
-            id=id_,
-            entry_id=entry_id,
-            shape_type=shape_type,
-            shape_args=json_loads(shape_args),
-            annotation=json_loads(annotation),
-            metadata=json_loads(meta),
+            id=r["id"],
+            entry_id=r["entry_id"],
+            shape_type=r["shape_type"],
+            shape_args=json_loads(r["shape_args"]),
+            annotation=json_loads(r["annotation"]),
+            metadata=json_loads(r["metadata"]),
         )
 
 
@@ -157,14 +156,14 @@ class AnnotationRepository(_BaseRepository):
         if qc_status:
             meta.setdefault("QC-Status", qc_status)
 
-        self._conn.execute(
-            "INSERT INTO annotations "
-            "(id, entry_id, shape_type, shape_args, annotation, metadata) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            [ann_id, entry_id, shape_type,
-             json_dumps(shape_args), json_dumps(annotation), json_dumps(meta)],
-        )
-        self._conn.commit()
+        self.insert([{
+            "id":         ann_id,
+            "entry_id":   entry_id,
+            "shape_type": shape_type,
+            "shape_args": json_dumps(shape_args),
+            "annotation": json_dumps(annotation),
+            "metadata":   json_dumps(meta),
+        }])
         return Annotation(
             id=ann_id, entry_id=entry_id, shape_type=shape_type,
             shape_args=shape_args, annotation=annotation, metadata=meta,
@@ -184,6 +183,11 @@ class AnnotationRepository(_BaseRepository):
         Returns
         -------
         list[Annotation]
+
+        Note
+        ----
+        Uses raw SQL to maintain explicit transaction control
+        (BEGIN / COMMIT / ROLLBACK), which ibis does not expose.
         """
         now     = utc_now()
         results = []
@@ -226,12 +230,11 @@ class AnnotationRepository(_BaseRepository):
 
     def get(self, id: str) -> Optional[Annotation]:
         """Retrieve a single annotation by primary key, or ``None``."""
-        row = self._conn.execute(
-            "SELECT id, entry_id, shape_type, shape_args, annotation, metadata "
-            "FROM annotations WHERE id = ?",
-            [id],
-        ).fetchone()
-        return Annotation._from_row(row) if row else None
+        t  = self.table
+        df = t.filter(t.id == id).execute()
+        if df.empty:
+            return None
+        return Annotation._from_record(df.iloc[0].to_dict())
 
     def for_entry(self, entry_id: str) -> list[Annotation]:
         """
@@ -239,34 +242,43 @@ class AnnotationRepository(_BaseRepository):
 
         For large batches consider :meth:`iter_for_entry`.
         """
-        rows = self._conn.execute(
-            "SELECT id, entry_id, shape_type, shape_args, annotation, metadata "
-            "FROM annotations WHERE entry_id = ? ORDER BY id",
-            [entry_id],
-        ).fetchall()
-        return [Annotation._from_row(r) for r in rows]
+        t  = self.table
+        records = (
+            t.filter(t.entry_id == entry_id)
+             .order_by("id")
+             .execute()
+             .to_dict("records")
+        )
+        return [Annotation._from_record(r) for r in records]
 
     def iter_for_entry(self, entry_id: str):
         """Yield annotations for *entry_id* one at a time."""
-        rows = self._conn.execute(
-            "SELECT id, entry_id, shape_type, shape_args, annotation, metadata "
-            "FROM annotations WHERE entry_id = ? ORDER BY id",
-            [entry_id],
-        ).fetchall()
-        for row in rows:
-            yield Annotation._from_row(row)
+        t  = self.table
+        records = (
+            t.filter(t.entry_id == entry_id)
+             .order_by("id")
+             .execute()
+             .to_dict("records")
+        )
+        for r in records:
+            yield Annotation._from_record(r)
 
     def for_dataset(self, dataset_id: str) -> list[Annotation]:
-        """Return all annotations across every entry in *dataset_id*."""
-        rows = self._conn.execute(
-            "SELECT a.id, a.entry_id, a.shape_type, a.shape_args, "
-            "       a.annotation, a.metadata "
-            "FROM annotations a "
-            "JOIN entries e ON a.entry_id = e.id "
-            "WHERE e.dataset_id = ? ORDER BY a.id",
-            [dataset_id],
-        ).fetchall()
-        return [Annotation._from_row(r) for r in rows]
+        """
+        Return all annotations across every entry in *dataset_id*.
+
+        Uses an ibis ``semi_join`` to filter by dataset without exposing
+        ambiguous join columns in the result.
+        """
+        a = self.table
+        e = self._ibis.table("entries")
+        records = (
+            a.semi_join(e.filter(e.dataset_id == dataset_id), a.entry_id == e.id)
+             .order_by("id")
+             .execute()
+             .to_dict("records")
+        )
+        return [Annotation._from_record(r) for r in records]
 
     def iter_for_dataset(self, dataset_id: str, *, batch_size: int = 1000):
         """
@@ -276,6 +288,11 @@ class AnnotationRepository(_BaseRepository):
 
             for ann in upd.annotations.iter_for_dataset(ds.id):
                 process(ann.annotation)
+
+        Note
+        ----
+        Uses raw SQL with explicit LIMIT/OFFSET for memory-bounded pagination,
+        which ibis does not expose at the cursor level.
         """
         offset = 0
         while True:
@@ -290,36 +307,34 @@ class AnnotationRepository(_BaseRepository):
             ).fetchall()
             if not rows:
                 break
-            for row in rows:
-                yield Annotation._from_row(row)
+            for id_, entry_id, shape_type, shape_args, annotation, meta in rows:
+                yield Annotation(
+                    id=id_, entry_id=entry_id, shape_type=shape_type,
+                    shape_args=json_loads(shape_args), annotation=json_loads(annotation),
+                    metadata=json_loads(meta),
+                )
             offset += batch_size
 
     def all(self) -> list[Annotation]:
         """Return every annotation in the file as a list."""
-        rows = self._conn.execute(
-            "SELECT id, entry_id, shape_type, shape_args, annotation, metadata "
-            "FROM annotations ORDER BY id"
-        ).fetchall()
-        return [Annotation._from_row(r) for r in rows]
+        records = self.table.order_by("id").execute().to_dict("records")
+        return [Annotation._from_record(r) for r in records]
 
     def count_for_dataset(self, dataset_id: str) -> int:
         """
         Return the number of annotations across all entries in *dataset_id*.
-
-        Uses a SQL join — prefer this over ibis ``isin(subquery)`` patterns
-        which ibis does not support.
-
             n = upd.annotations.count_for_dataset(ds.id)
         """
-        return self._conn.execute(
-            "SELECT count(*) FROM annotations a "
-            "JOIN entries e ON a.entry_id = e.id "
-            "WHERE e.dataset_id = ?",
-            [dataset_id],
-        ).fetchone()[0]
+        a = self.table
+        e = self._ibis.table("entries")
+        return int(
+            a.semi_join(e.filter(e.dataset_id == dataset_id), a.entry_id == e.id)
+             .count()
+             .execute()
+        )
 
     # ------------------------------------------------------------------
-    # Update
+    # Update  (raw SQL — ibis has no UPDATE support)
     # ------------------------------------------------------------------
 
     def update(
@@ -365,7 +380,7 @@ class AnnotationRepository(_BaseRepository):
         )
 
     # ------------------------------------------------------------------
-    # Delete
+    # Delete  (raw SQL — RETURNING clause not available via ibis)
     # ------------------------------------------------------------------
 
     def delete(self, id: str) -> bool:

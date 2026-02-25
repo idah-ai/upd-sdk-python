@@ -68,9 +68,13 @@ class Entry:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def _from_row(cls, row: tuple) -> "Entry":
-        id_, dataset_id, media_url, meta = row
-        return cls(id=id_, dataset_id=dataset_id, media_url=media_url, metadata=json_loads(meta))
+    def _from_record(cls, r: dict) -> "Entry":
+        return cls(
+            id=r["id"],
+            dataset_id=r["dataset_id"],
+            media_url=r["media_url"],
+            metadata=json_loads(r["metadata"]),
+        )
 
     @property
     def is_local(self) -> bool:
@@ -142,11 +146,12 @@ class EntryRepository(_BaseRepository):
         if created_by:
             meta.setdefault("Created-By", created_by)
 
-        self._conn.execute(
-            "INSERT INTO entries (id, dataset_id, media_url, metadata) VALUES (?, ?, ?, ?)",
-            [entry_id, dataset_id, media_url, json_dumps(meta)],
-        )
-        self._conn.commit()
+        self.insert([{
+            "id":         entry_id,
+            "dataset_id": dataset_id,
+            "media_url":  media_url,
+            "metadata":   json_dumps(meta),
+        }])
         return Entry(id=entry_id, dataset_id=dataset_id, media_url=media_url, metadata=meta)
 
     def bulk_create(self, entries: list[dict[str, Any]]) -> list[Entry]:
@@ -162,6 +167,11 @@ class EntryRepository(_BaseRepository):
         Returns
         -------
         list[Entry]
+
+        Note
+        ----
+        Uses raw SQL to maintain explicit transaction control
+        (BEGIN / COMMIT / ROLLBACK), which ibis does not expose.
         """
         now      = utc_now()
         results  = []
@@ -194,10 +204,11 @@ class EntryRepository(_BaseRepository):
 
     def get(self, id: str) -> Optional[Entry]:
         """Retrieve a single entry by primary key, or ``None``."""
-        row = self._conn.execute(
-            "SELECT id, dataset_id, media_url, metadata FROM entries WHERE id = ?", [id]
-        ).fetchone()
-        return Entry._from_row(row) if row else None
+        t  = self.table
+        df = t.filter(t.id == id).execute()
+        if df.empty:
+            return None
+        return Entry._from_record(df.iloc[0].to_dict())
 
     def for_dataset(self, dataset_id: str) -> list[Entry]:
         """
@@ -206,12 +217,14 @@ class EntryRepository(_BaseRepository):
         For large datasets consider :meth:`iter_for_dataset` to avoid
         loading everything into memory at once.
         """
-        rows = self._conn.execute(
-            "SELECT id, dataset_id, media_url, metadata "
-            "FROM entries WHERE dataset_id = ? ORDER BY id",
-            [dataset_id],
-        ).fetchall()
-        return [Entry._from_row(r) for r in rows]
+        t  = self.table
+        records = (
+            t.filter(t.dataset_id == dataset_id)
+             .order_by("id")
+             .execute()
+             .to_dict("records")
+        )
+        return [Entry._from_record(r) for r in records]
 
     def iter_for_dataset(self, dataset_id: str, *, batch_size: int = 1000):
         """
@@ -223,6 +236,11 @@ class EntryRepository(_BaseRepository):
             for entry in upd.entries.iter_for_dataset(ds.id):
                 blob = upd.medias.get(entry.local_media_id).blob_data
                 # feed to model …
+
+        Note
+        ----
+        Uses raw SQL with explicit LIMIT/OFFSET for memory-bounded pagination,
+        which ibis does not expose at the cursor level.
         """
         offset = 0
         while True:
@@ -235,18 +253,18 @@ class EntryRepository(_BaseRepository):
             if not rows:
                 break
             for row in rows:
-                yield Entry._from_row(row)
+                id_, ds_id, media_url, meta = row
+                yield Entry(id=id_, dataset_id=ds_id, media_url=media_url,
+                            metadata=json_loads(meta))
             offset += batch_size
 
     def all(self) -> list[Entry]:
         """Return every entry in the file as a list."""
-        rows = self._conn.execute(
-            "SELECT id, dataset_id, media_url, metadata FROM entries ORDER BY id"
-        ).fetchall()
-        return [Entry._from_row(r) for r in rows]
+        records = self.table.order_by("id").execute().to_dict("records")
+        return [Entry._from_record(r) for r in records]
 
     # ------------------------------------------------------------------
-    # Update
+    # Update  (raw SQL — ibis has no UPDATE support)
     # ------------------------------------------------------------------
 
     def update(
@@ -281,7 +299,7 @@ class EntryRepository(_BaseRepository):
         return Entry(id=id, dataset_id=existing.dataset_id, media_url=new_url, metadata=new_meta)
 
     # ------------------------------------------------------------------
-    # Delete
+    # Delete  (raw SQL — RETURNING clause not available via ibis)
     # ------------------------------------------------------------------
 
     def delete(self, id: str) -> bool:

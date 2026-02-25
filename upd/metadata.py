@@ -65,12 +65,11 @@ class MetadataRepository(_BaseRepository):
         Any
             Decoded Python object, or ``None``.
         """
-        row = (
-            self._conn
-            .execute("SELECT value FROM metadata WHERE key = ?", [key])
-            .fetchone()
-        )
-        return None if row is None else json_loads(row[0])
+        t  = self.table
+        df = t.filter(t.key == key).execute()
+        if df.empty:
+            return None
+        return json_loads(df.iloc[0]["value"])
 
     def all(self) -> dict[str, Any]:
         """
@@ -80,11 +79,11 @@ class MetadataRepository(_BaseRepository):
         -------
         dict[str, Any]
         """
-        rows = self._conn.execute("SELECT key, value FROM metadata").fetchall()
-        return {k: json_loads(v) for k, v in rows}
+        records = self.table.execute().to_dict("records")
+        return {r["key"]: json_loads(r["value"]) for r in records}
 
     # ------------------------------------------------------------------
-    # Write
+    # Write  (upsert / delete — no ibis equivalent; raw SQL retained)
     # ------------------------------------------------------------------
 
     def set(self, key: str, value: Any) -> None:
@@ -99,6 +98,7 @@ class MetadataRepository(_BaseRepository):
             Any JSON-serialisable Python object.
         """
         validate_id(key, field="metadata key")
+        # ON CONFLICT upsert has no ibis equivalent — raw SQL required.
         self._conn.execute(
             "INSERT INTO metadata (key, value) VALUES (?, ?) "
             "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -115,6 +115,7 @@ class MetadataRepository(_BaseRepository):
         bool
             ``True`` if a row was deleted.
         """
+        # RETURNING clause not available via ibis — raw SQL required.
         result = self._conn.execute(
             "DELETE FROM metadata WHERE key = ? RETURNING key", [key]
         ).fetchone()

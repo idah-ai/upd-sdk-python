@@ -1,9 +1,7 @@
 """
 MNIST → UPD
 
-torchvision handles the download and exposes each item as a PIL image —
-no manual HTTP, no binary parsing.  Pillow is already a torchvision
-dependency so no extra install is needed.
+torchvision handles the download and exposes each item as a PIL image
 
 Prerequisites
 -------------

@@ -106,7 +106,7 @@ class TestEntryQuery:
         assert hasattr(upd.entries.table, "execute")
 
     def test_filter_predicate_direct(self, upd, ds):
-        """filter(predicate) — no double-call."""
+        """filter(predicate)"""
         upd.entries.create(dataset_id=ds.id, media_url="https://a.com")
         df = upd.entries.filter(upd.entries.dataset_id == ds.id).execute()
         assert len(df) == 1

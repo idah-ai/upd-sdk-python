@@ -56,9 +56,13 @@ class Dataset:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def _from_row(cls, row: tuple) -> "Dataset":
-        id_, name, modality, meta = row
-        return cls(id=id_, name=name, modality=modality, metadata=json_loads(meta))
+    def _from_record(cls, r: dict) -> "Dataset":
+        return cls(
+            id=r["id"],
+            name=r["name"],
+            modality=r["modality"],
+            metadata=json_loads(r["metadata"]),
+        )
 
 
 class DatasetRepository(_BaseRepository):
@@ -121,11 +125,12 @@ class DatasetRepository(_BaseRepository):
         if created_by:
             meta.setdefault("Created-By", created_by)
 
-        self._conn.execute(
-            "INSERT INTO datasets (id, name, modality, metadata) VALUES (?, ?, ?, ?)",
-            [ds_id, name, modality, json_dumps(meta)],
-        )
-        self._conn.commit()
+        self.insert([{
+            "id":       ds_id,
+            "name":     name,
+            "modality": modality,
+            "metadata": json_dumps(meta),
+        }])
         return Dataset(id=ds_id, name=name, modality=modality, metadata=meta)
 
     # ------------------------------------------------------------------
@@ -134,20 +139,19 @@ class DatasetRepository(_BaseRepository):
 
     def get(self, id: str) -> Optional[Dataset]:
         """Retrieve a dataset by primary key, or ``None``."""
-        row = self._conn.execute(
-            "SELECT id, name, modality, metadata FROM datasets WHERE id = ?", [id]
-        ).fetchone()
-        return Dataset._from_row(row) if row else None
+        t  = self.table
+        df = t.filter(t.id == id).execute()
+        if df.empty:
+            return None
+        return Dataset._from_record(df.iloc[0].to_dict())
 
     def all(self) -> list[Dataset]:
         """Return all datasets, ordered by ``id``."""
-        rows = self._conn.execute(
-            "SELECT id, name, modality, metadata FROM datasets ORDER BY id"
-        ).fetchall()
-        return [Dataset._from_row(r) for r in rows]
+        records = self.table.order_by("id").execute().to_dict("records")
+        return [Dataset._from_record(r) for r in records]
 
     # ------------------------------------------------------------------
-    # Update
+    # Update  (raw SQL — ibis has no UPDATE support)
     # ------------------------------------------------------------------
 
     def update(
@@ -188,7 +192,7 @@ class DatasetRepository(_BaseRepository):
         return Dataset(id=id, name=new_name, modality=new_modality, metadata=new_meta)
 
     # ------------------------------------------------------------------
-    # Delete
+    # Delete  (raw SQL — RETURNING clause not available via ibis)
     # ------------------------------------------------------------------
 
     def delete(self, id: str) -> bool:

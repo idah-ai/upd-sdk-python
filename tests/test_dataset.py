@@ -78,7 +78,7 @@ class TestDatasetQuery:
         assert hasattr(upd.datasets.table, "execute")
 
     def test_filter_predicate_direct(self, upd):
-        """filter(predicate) — no double-call."""
+        """filter(predicate)"""
         upd.datasets.create(name="ImageDS", modality="image")
         upd.datasets.create(name="TextDS",  modality="text")
         t  = upd.datasets.table

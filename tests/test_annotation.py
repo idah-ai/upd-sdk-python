@@ -129,8 +129,9 @@ class TestAnnotationQuery:
                                shape_args={}, annotation={})
         upd.annotations.create(entry_id=entry.id, shape_type="image:polygon",
                                shape_args={}, annotation={})
-        df = upd.annotations.filter(upd.annotations.shape_type == "image:bounding-box").execute()
+        df = upd.annotations.filter(upd.annotations["shape_type"] == "image:bounding-box").execute()
         assert len(df) == 1
+
 
     def test_filter_with_table_notation(self, upd, entry):
         """.table still works as an explicit expression handle."""

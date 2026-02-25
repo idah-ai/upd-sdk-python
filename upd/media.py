@@ -62,14 +62,14 @@ class Media:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def _from_row(cls, row: tuple) -> "Media":
-        id_, key, blob, mtype, meta = row
+    def _from_record(cls, r: dict) -> "Media":
+        blob = r.get("blob_data")
         return cls(
-            id=id_,
-            key=key,
+            id=r["id"],
+            key=r["key"],
             blob_data=bytes(blob) if blob is not None else None,
-            media_type=mtype,
-            metadata=json_loads(meta),
+            media_type=r.get("media_type"),
+            metadata=json_loads(r.get("metadata")),
         )
 
     @property
@@ -103,6 +103,16 @@ class MediaRepository(_BaseRepository):
         Use :meth:`get` or :meth:`get_all_keys` to retrieve binary content.
         """
         return self._ibis.table("medias").drop("blob_data")
+
+    @property
+    def _full_table(self):
+        """
+        Internal: ibis table expression that **includes** ``blob_data``.
+
+        Used by :meth:`get` and :meth:`get_all_keys` which must return
+        the raw binary content.
+        """
+        return self._ibis.table("medias")
 
     # ------------------------------------------------------------------
     # Create
@@ -138,6 +148,11 @@ class MediaRepository(_BaseRepository):
         Returns
         -------
         Media
+
+        Note
+        ----
+        Uses raw SQL for the insert because ibis does not reliably handle
+        binary BLOB parameters across all backends.
         """
         media_id = id or new_id()
         validate_id(media_id)
@@ -192,22 +207,31 @@ class MediaRepository(_BaseRepository):
     # ------------------------------------------------------------------
 
     def get(self, id: str, key: str = "") -> Optional[Media]:
-        """Retrieve a single media row by ``(id, key)``, or ``None``."""
-        row = self._conn.execute(
-            "SELECT id, key, blob_data, media_type, metadata "
-            "FROM medias WHERE id = ? AND key = ?",
-            [id, key],
-        ).fetchone()
-        return Media._from_row(row) if row else None
+        """
+        Retrieve a single media row by ``(id, key)``, or ``None``.
+
+        Uses the full ibis table (including ``blob_data``).
+        """
+        t  = self._full_table
+        df = t.filter((t.id == id) & (t.key == key)).execute()
+        if df.empty:
+            return None
+        return Media._from_record(df.iloc[0].to_dict())
 
     def get_all_keys(self, id: str) -> list[Media]:
-        """Return all rows sharing *id* (a composite media group)."""
-        rows = self._conn.execute(
-            "SELECT id, key, blob_data, media_type, metadata "
-            "FROM medias WHERE id = ? ORDER BY key",
-            [id],
-        ).fetchall()
-        return [Media._from_row(r) for r in rows]
+        """
+        Return all rows sharing *id* (a composite media group).
+
+        Uses the full ibis table (including ``blob_data``).
+        """
+        t  = self._full_table
+        records = (
+            t.filter(t.id == id)
+             .order_by("key")
+             .execute()
+             .to_dict("records")
+        )
+        return [Media._from_record(r) for r in records]
 
     def all(self) -> list[Media]:
         """
@@ -217,13 +241,21 @@ class MediaRepository(_BaseRepository):
         or :meth:`get_all_keys` to retrieve binary content for specific items.
         Loading blobs for an entire collection at once can exhaust memory.
         """
-        rows = self._conn.execute(
-            "SELECT id, key, NULL, media_type, metadata FROM medias ORDER BY id, key"
-        ).fetchall()
-        return [Media._from_row(r) for r in rows]
+        # self.table already excludes blob_data — safe to iterate in full.
+        records = self.table.order_by(["id", "key"]).execute().to_dict("records")
+        return [
+            Media(
+                id=r["id"],
+                key=r["key"],
+                blob_data=None,
+                media_type=r.get("media_type"),
+                metadata=json_loads(r.get("metadata")),
+            )
+            for r in records
+        ]
 
     # ------------------------------------------------------------------
-    # Update
+    # Update  (raw SQL — ibis has no UPDATE support)
     # ------------------------------------------------------------------
 
     def update(
@@ -254,7 +286,7 @@ class MediaRepository(_BaseRepository):
         return Media(id=id, key=key, blob_data=new_blob, media_type=new_mtype, metadata=new_meta)
 
     # ------------------------------------------------------------------
-    # Delete
+    # Delete  (raw SQL — RETURNING clause not available via ibis)
     # ------------------------------------------------------------------
 
     def delete(self, id: str, key: str = "") -> bool:
