@@ -251,18 +251,6 @@ class AnnotationRepository(_BaseRepository):
         )
         return [Annotation._from_record(r) for r in records]
 
-    def iter_for_entry(self, entry_id: str):
-        """Yield annotations for *entry_id* one at a time."""
-        t  = self.table
-        records = (
-            t.filter(t.entry_id == entry_id)
-             .order_by("id")
-             .execute()
-             .to_dict("records")
-        )
-        for r in records:
-            yield Annotation._from_record(r)
-
     def for_dataset(self, dataset_id: str) -> list[Annotation]:
         """
         Return all annotations across every entry in *dataset_id*.
@@ -395,6 +383,26 @@ class AnnotationRepository(_BaseRepository):
         """Delete all annotations for *entry_id*.  Returns the count removed."""
         rows = self._conn.execute(
             "DELETE FROM annotations WHERE entry_id = ? RETURNING id", [entry_id]
+        ).fetchall()
+        self._conn.commit()
+        return len(rows)
+
+    def delete_for_dataset(self, dataset_id: str) -> int:
+        """
+        Delete all annotations across every entry in *dataset_id*.
+
+        Uses a subquery to resolve the entry → dataset relationship in one
+        SQL statement.  Returns the count of annotations removed.
+
+        Typically called before :meth:`EntryRepository.delete_for_dataset`
+        to satisfy the ``ON DELETE RESTRICT`` foreign key on ``entry_id``.
+        Use :meth:`UPD.delete_dataset` to handle the full cascade automatically.
+        """
+        rows = self._conn.execute(
+            "DELETE FROM annotations "
+            "WHERE entry_id IN (SELECT id FROM entries WHERE dataset_id = ?) "
+            "RETURNING id",
+            [dataset_id],
         ).fetchall()
         self._conn.commit()
         return len(rows)

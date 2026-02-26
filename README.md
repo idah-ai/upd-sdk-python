@@ -2,9 +2,9 @@
 
 **Python library for Universal Portable Dataset (UPD) files.**
 
-`upd` provides a clean, ORM-like API for creating, reading, updating, and
-deleting data in [UPD files](./RFC.md) — portable DuckDB databases designed
-to store and share AI/ML datasets with full provenance tracking.
+`upd` provides a clean API for creating, reading, updating, and deleting data
+in UPD files — portable DuckDB databases designed to store and share AI/ML
+datasets with full provenance tracking.
 
 ---
 
@@ -14,22 +14,18 @@ to store and share AI/ML datasets with full provenance tracking.
 - [Quick Start](#quick-start)
 - [Architecture](#architecture)
 - [API Reference](#api-reference)
-  - [UPD](#UPD)
+  - [UPD](#upd-facade)
   - [MetadataRepository](#metadatarepository)
   - [DatasetRepository](#datasetrepository)
   - [MediaRepository](#mediarepository)
   - [EntryRepository](#entryrepository)
   - [AnnotationRepository](#annotationrepository)
-- [Querying](#querying)
-- [UPD Schema Overview](#upd-schema-overview)
-- [Running Tests](#running-tests)
-- [Examples](#examples)
-  - [MNIST → UPD](#mnist--upd)
-  - [training from MNIST UPD](#training-from-MNIST-UPD)
-  - [MNIST inference with the trained CNN (inference + round-trip)](#mnist-inference-with-the-trained-cnn-inference--round-trip)
-  - [COCO8 → UPD](#coco8--upd)
-  - [COCO8 object detection with YOLOv8 (inference + round-trip)
-    ](#coco8-object-detection-with-yolov8-inference--round-trip)
+- [Querying with ibis](#querying-with-ibis)
+- [On dataclasses and ibis results](#on-dataclasses-and-ibis-results)
+- [Schema overview](#schema-overview)
+- [Running tests](#running-tests)
+- [Dataset conversion examples](#dataset-conversion-examples)
+- [ML examples](#ml-examples)
 
 ---
 
@@ -50,25 +46,16 @@ from upd import UPD
 
 with UPD.open("my_dataset.upd") as upd:
 
-    # ── 1. Create a dataset ───────────────────────────────────────────────
-    ds = upd.datasets.create(
-        name="My Image Dataset",
-        modality="image",
-        created_by="alice@example.com",
-    )
+    # 1. Create a dataset
+    ds = upd.datasets.create(name="My Images", modality="image")
 
-    # ── 2. Embed a media file ─────────────────────────────────────────────
+    # 2. Embed a media file
     media = upd.medias.create_from_file("photo.jpg")
-    # — or from raw bytes —
-    media = upd.medias.create(blob_data=image_bytes, media_type="image/png")
 
-    # ── 3. Create an entry linking dataset → media ────────────────────────
-    entry = upd.entries.create(
-        dataset_id=ds.id,
-        media_url=media.local_url,   # "local:<uuid>"
-    )
+    # 3. Link dataset → media via an entry
+    entry = upd.entries.create(dataset_id=ds.id, media_url=media.local_url)
 
-    # ── 4. Annotate ───────────────────────────────────────────────────────
+    # 4. Annotate
     upd.annotations.create(
         entry_id=entry.id,
         shape_type="bounding-box",
@@ -77,10 +64,12 @@ with UPD.open("my_dataset.upd") as upd:
         qc_status="Passed",
     )
 
-    # ── 5. Query ──────────────────────────────────────────────────────────
+    # 5. Query with ibis
     t  = upd.annotations.table
     df = upd.annotations.filter(t.shape_type == "bounding-box").execute()
-    print(df)
+
+    # 6. Cascade delete
+    upd.delete_dataset(ds.id)   # removes annotations → entries → dataset
 ```
 
 ---
@@ -89,109 +78,118 @@ with UPD.open("my_dataset.upd") as upd:
 
 ```
 upd/
-├── _connection.py   # UPD — main facade
-├── _schema.py       # SQL DDL constants (CREATE TABLE …)
+├── _connection.py   # UPD — main facade + cascade helpers
+├── _schema.py       # SQL DDL (CREATE TABLE …)
 ├── _utils.py        # UUIDv7, JSON helpers, validators
-├── _base.py         # _BaseRepository — transparent query delegation
+├── _base.py         # _BaseRepository — ibis query delegation
 ├── metadata.py      # MetadataRepository  ← global key/value config
-├── dataset.py       # DatasetRepository   ← logical data groupings
+├── dataset.py       # DatasetRepository   ← logical groupings
 ├── media.py         # MediaRepository     ← binary blobs / references
 ├── entry.py         # EntryRepository     ← data point ↔ media links
 └── annotation.py    # AnnotationRepository ← shapes + labels
 ```
 
-Each repository inherits from `_BaseRepository`, which delegates any
-unrecognised attribute to the underlying table expression. This means query
-operations (`filter`, `select`, `join`, `order_by`, `group_by`, `limit`,
-`aggregate`, `execute`, …) work **directly on the repository object** — the
-repository is the query entry point.
-
-```
-UPD
-├── .metadata    → MetadataRepository
-├── .datasets    → DatasetRepository
-├── .medias      → MediaRepository
-├── .entries     → EntryRepository
-└── .annotations → AnnotationRepository
-```
+Each repository inherits `_BaseRepository`, which delegates any unrecognised
+attribute to the underlying ibis table expression. Query operations —
+`filter`, `select`, `join`, `order_by`, `group_by`, `limit`, `aggregate`,
+`execute` — work **directly on the repository object**.
 
 ---
 
 ## API Reference
 
-### UPD
+### UPD facade
 
 ```python
-from upd import UPD
-
 # Open / create (read-write)
-upd = UPD.open("path/to/file.upd")
+upd = UPD.open("file.upd")
 
 # Read-only
-upd = UPD.open("path/to/file.upd", read_only=True)
+upd = UPD.open("file.upd", read_only=True)
 
 # In-memory (ephemeral)
 upd = UPD.open(":memory:")
 
-# Context manager (auto-close)
+# Context manager
 with UPD.open("file.upd") as upd:
     ...
+```
 
-# Direct SQL for advanced / Flavor-specific queries
-upd.execute("SELECT * FROM my_flavor_table WHERE dataset_id = ?", ["ds-001"])
-upd.raw_connection.execute("SELECT …").df()
+| Method / property              | Description                                                     |
+| ------------------------------ | --------------------------------------------------------------- |
+| `UPD.open(path, *, read_only)` | Open or create a UPD file.                                      |
+| `close()`                      | Flush and close the connection.                                 |
+| `delete_dataset(id)`           | Cascade-delete annotations → entries → dataset. Returns `bool`. |
+| `execute(sql, params)`         | Run raw SQL. Returns a DuckDB result.                           |
+| `raw_connection`               | Direct `duckdb.DuckDBPyConnection` for advanced use.            |
+| `path`                         | Filesystem path of the underlying file.                         |
+| `.metadata`                    | `MetadataRepository`                                            |
+| `.datasets`                    | `DatasetRepository`                                             |
+| `.medias`                      | `MediaRepository`                                               |
+| `.entries`                     | `EntryRepository`                                               |
+| `.annotations`                 | `AnnotationRepository`                                          |
+
+**Cascade delete**
+
+Because the schema uses `ON DELETE RESTRICT` foreign keys, rows must be
+removed in order: annotations first, then entries, then the dataset.
+`delete_dataset` handles this automatically:
+
+```python
+deleted = upd.delete_dataset(ds.id)   # True if the dataset existed
+```
+
+To delete selectively without removing the dataset itself:
+
+```python
+n_anns    = upd.annotations.delete_for_dataset(ds.id)
+n_entries = upd.entries.delete_for_dataset(ds.id)
 ```
 
 ---
 
-### MetadataRepository `upd.metadata`
+### MetadataRepository — `upd.metadata`
 
 Stores file-level key/value configuration (RFC §3.2).
 
-| Method                          | Description                                |
-| ------------------------------- | ------------------------------------------ |
-| `get(key)`                      | Return decoded value for _key_, or `None`. |
-| `set(key, value)`               | Upsert a JSON-serialisable value.          |
-| `delete(key)`                   | Remove a key. Returns `True` if found.     |
-| `all()`                         | Return all entries as `dict[str, Any]`.    |
-| `table`                         | Underlying table expression.               |
-| `filter(*predicates)`           | Shorthand: `table.filter(*predicates)`.    |
-| `select(…)` / `order_by(…)` / … | Delegated directly to the table.           |
+| Method            | Returns          | Description                       |
+| ----------------- | ---------------- | --------------------------------- |
+| `get(key)`        | `Any \| None`    | Decoded value, or `None`.         |
+| `set(key, value)` | `None`           | Upsert a JSON-serialisable value. |
+| `delete(key)`     | `bool`           | Remove a key.                     |
+| `all()`           | `dict[str, Any]` | Every key/value as a dict.        |
 
 ```python
 upd.metadata.set("Authored-By", "alice@example.com")
-print(upd.metadata.get("Schema-Version"))   # "0.2"
+upd.metadata.get("Schema-Version")   # "0.2"
 
+# ibis query
 t  = upd.metadata.table
 df = upd.metadata.filter(t.key.startswith("Schema")).execute()
-df = upd.metadata.select("key").execute()
 ```
 
 ---
 
-### DatasetRepository `upd.datasets`
+### DatasetRepository — `upd.datasets`
 
 Logical groupings of data (RFC §3.3).
 
-| Method                                  | Signature                                       | Description                             |
-| --------------------------------------- | ----------------------------------------------- | --------------------------------------- |
-| `create`                                | `(name, modality, *, id, metadata, created_by)` | Insert. Returns `Dataset`.              |
-| `get`                                   | `(id)`                                          | Fetch by PK. Returns `Dataset \| None`. |
-| `all`                                   | `()`                                            | `list[Dataset]`.                        |
-| `update`                                | `(id, *, name, modality, metadata)`             | Partial update.                         |
-| `delete`                                | `(id)`                                          | Delete (fails if entries exist).        |
-| `table`                                 | property                                        | Underlying table expression.            |
-| `filter(*predicates)` / `select(…)` / … | Delegated to table.                             |
+| Method                                                | Returns           | Description                      |
+| ----------------------------------------------------- | ----------------- | -------------------------------- |
+| `create(name, modality, *, id, metadata, created_by)` | `Dataset`         | Insert.                          |
+| `get(id)`                                             | `Dataset \| None` | Fetch by PK.                     |
+| `all()`                                               | `list[Dataset]`   | Every dataset, ordered by id.    |
+| `update(id, *, name, modality, metadata)`             | `Dataset \| None` | Partial update.                  |
+| `delete(id)`                                          | `bool`            | Delete (fails if entries exist). |
 
 ```python
 ds = upd.datasets.create(name="COCO Train", modality="image")
 
 t  = upd.datasets.table
-df = upd.datasets.filter(t.modality == "image").execute()
-df = upd.datasets.order_by("name").select("id", "name").execute()
+df = upd.datasets.filter(t.modality == "image").order_by("name").execute()
 ```
 
-**`Dataset` dataclass**
+**`Dataset`**
 
 ```python
 @dataclass
@@ -204,79 +202,90 @@ class Dataset:
 
 ---
 
-### MediaRepository `upd.medias`
+### MediaRepository — `upd.medias`
 
 Binary blobs or external media references (RFC §3.4).
 
-| Method                                  | Signature                                       | Description                              |
-| --------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
-| `create`                                | `(*, id, key, blob_data, media_type, metadata)` | Insert a media row.                      |
-| `create_from_file`                      | `(path, *, id, key, media_type, metadata)`      | Embed a file as BLOB.                    |
-| `get`                                   | `(id, key="")`                                  | Fetch by composite PK (includes blob).   |
-| `get_all_keys`                          | `(id)`                                          | All rows for a composite group.          |
-| `all`                                   | `()`                                            | All rows, including blobs.               |
-| `update`                                | `(id, key, *, …)`                               | Partial update.                          |
-| `delete`                                | `(id, key="")`                                  | Delete by composite PK.                  |
-| `delete_all_keys`                       | `(id)`                                          | Delete an entire composite group.        |
-| `table`                                 | property                                        | Table expression (`blob_data` excluded). |
-| `filter(*predicates)` / `select(…)` / … | Delegated to table.                             |
+The composite primary key is `(id, key)`. Use `key=""` (default) for
+single-file media; use distinct keys for related files (tiles, bands, …)
+that share the same `id`.
+
+> `blob_data` is **excluded** from the ibis `table` expression for
+> performance. Use `get()` or `get_all_keys()` to retrieve binary content.
+
+| Method                                                     | Returns         | Description                                    |
+| ---------------------------------------------------------- | --------------- | ---------------------------------------------- |
+| `create(*, id, key, blob_data, media_type, metadata)`      | `Media`         | Insert a row.                                  |
+| `create_from_file(path, *, id, key, media_type, metadata)` | `Media`         | Read a file and embed it as BLOB.              |
+| `get(id, key="")`                                          | `Media \| None` | Fetch by composite PK (includes blob).         |
+| `get_all_keys(id)`                                         | `list[Media]`   | All rows for a composite group.                |
+| `all()`                                                    | `list[Media]`   | All rows without blob data (`blob_data=None`). |
+| `update(id, key, *, blob_data, media_type, metadata)`      | `Media \| None` | Partial update.                                |
+| `delete(id, key="")`                                       | `bool`          | Delete one row.                                |
+| `delete_all_keys(id)`                                      | `int`           | Delete a whole composite group. Returns count. |
 
 ```python
-m = upd.medias.create_from_file("photo.jpg")
-print(m.local_url)   # "local:<uuid>"
+media = upd.medias.create_from_file("photo.jpg")
+media.local_url   # "local:<uuid>"  — use in entries.media_url
 
-# Composite media (map tiles, multi-band imagery, …)
+# Composite group (e.g. map tiles)
 upd.medias.create(id="map-001", key="tile-00.png", blob_data=t0, media_type="image/png")
 upd.medias.create(id="map-001", key="tile-01.png", blob_data=t1, media_type="image/png")
-tiles = upd.medias.get_all_keys("map-001")
+tiles = upd.medias.get_all_keys("map-001")    # list[Media] with blob_data populated
 
-# Query (blob_data not included in expressions)
+# Query (blob_data column not present)
 t  = upd.medias.table
 df = upd.medias.filter(t.media_type == "image/png").select("id", "key").execute()
 ```
 
-**`Media` dataclass**
+**`Media`**
 
 ```python
 @dataclass
 class Media:
     id: str
-    key: str                  # "" for single-file media
+    key: str                    # "" for single-file media
     blob_data: bytes | None
     media_type: str | None
     metadata: dict[str, Any]
-    local_url: str            # property → "local:<id>"
+    local_url: str              # property → "local:<id>"
 ```
 
 ---
 
-### EntryRepository `upd.entries`
+### EntryRepository — `upd.entries`
 
 Individual data points linking a dataset to media (RFC §3.5).
 
-| Method                            | Signature                                              | Description                          |
-| --------------------------------- | ------------------------------------------------------ | ------------------------------------ |
-| `create`                          | `(dataset_id, media_url, *, id, metadata, created_by)` | Insert.                              |
-| `bulk_create`                     | `(entries: list[dict])`                                | Insert many in one pass.             |
-| `get`                             | `(id)`                                                 | Fetch by PK.                         |
-| `for_dataset`                     | `(dataset_id)`                                         | All entries in a dataset.            |
-| `all`                             | `()`                                                   | All entries.                         |
-| `count`                           | `(dataset_id=None)`                                    | Count, optionally per dataset.       |
-| `update`                          | `(id, *, media_url, metadata)`                         | Partial update.                      |
-| `delete`                          | `(id)`                                                 | Delete (fails if annotations exist). |
-| `table` / `filter` / `select` / … | Query delegation.                                      |
+| Method                                                       | Returns           | Description                                       |
+| ------------------------------------------------------------ | ----------------- | ------------------------------------------------- |
+| `create(dataset_id, media_url, *, id, metadata, created_by)` | `Entry`           | Insert.                                           |
+| `bulk_create(entries)`                                       | `list[Entry]`     | Insert many in one transaction.                   |
+| `get(id)`                                                    | `Entry \| None`   | Fetch by PK.                                      |
+| `for_dataset(dataset_id)`                                    | `list[Entry]`     | All entries in a dataset.                         |
+| `iter_for_dataset(dataset_id, *, batch_size)`                | `Iterator[Entry]` | Streaming, batched. Preferred for large datasets. |
+| `all()`                                                      | `list[Entry]`     | Every entry.                                      |
+| `update(id, *, media_url, metadata)`                         | `Entry \| None`   | Partial update.                                   |
+| `delete(id)`                                                 | `bool`            | Delete by PK (fails if annotations exist).        |
+| `delete_for_dataset(dataset_id)`                             | `int`             | Delete all entries for a dataset. Returns count.  |
 
 ```python
-entry = upd.entries.create(dataset_id=ds.id, media_url="local:m-001")
+entry = upd.entries.create(dataset_id=ds.id, media_url=media.local_url)
 
-rows = [{"dataset_id": ds.id, "media_url": f"local:{mid}"} for mid in media_ids]
+# Bulk insert
+rows    = [{"dataset_id": ds.id, "media_url": m.local_url} for m in medias]
 entries = upd.entries.bulk_create(rows)
 
+# Streaming iteration (ML training loops)
+for entry in upd.entries.iter_for_dataset(ds.id):
+    blob = upd.medias.get(entry.local_media_id).blob_data
+
+# ibis query
 t  = upd.entries.table
-df = upd.entries.filter(t.dataset_id == ds.id).limit(100).execute()
+df = upd.entries.filter(t.dataset_id == ds.id).count().execute()
 ```
 
-**`Entry` dataclass**
+**`Entry`**
 
 ```python
 @dataclass
@@ -285,29 +294,30 @@ class Entry:
     dataset_id: str
     media_url: str
     metadata: dict[str, Any]
-    is_local: bool           # property
-    local_media_id: str | None  # property
+    is_local: bool              # property — True when media_url starts with "local:"
+    local_media_id: str | None  # property — the medias.id referenced
 ```
 
 ---
 
-### AnnotationRepository `upd.annotations`
+### AnnotationRepository — `upd.annotations`
 
 Structured labels for entries (RFC §3.6).
 
-| Method                            | Signature                                              | Description                          |
-| --------------------------------- | ------------------------------------------------------ | ------------------------------------ |
-| `create`                          | `(entry_id, shape_type, shape_args, annotation, *, …)` | Insert.                              |
-| `bulk_create`                     | `(annotations: list[dict])`                            | Insert many.                         |
-| `get`                             | `(id)`                                                 | Fetch by PK.                         |
-| `for_entry`                       | `(entry_id)`                                           | All annotations for one entry.       |
-| `for_dataset`                     | `(dataset_id)`                                         | All annotations across a dataset.    |
-| `all`                             | `()`                                                   | All annotations.                     |
-| `count`                           | `(entry_id=None)`                                      | Count, optionally per entry.         |
-| `update`                          | `(id, *, …, qc_status)`                                | Partial update.                      |
-| `delete`                          | `(id)`                                                 | Delete by PK.                        |
-| `delete_for_entry`                | `(entry_id)`                                           | Delete all annotations for an entry. |
-| `table` / `filter` / `select` / … | Query delegation.                                      |
+| Method                                                                                         | Returns                | Description                                             |
+| ---------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------- |
+| `create(entry_id, shape_type, shape_args, annotation, *, id, metadata, created_by, qc_status)` | `Annotation`           | Insert.                                                 |
+| `bulk_create(annotations)`                                                                     | `list[Annotation]`     | Insert many in one transaction.                         |
+| `get(id)`                                                                                      | `Annotation \| None`   | Fetch by PK.                                            |
+| `for_entry(entry_id)`                                                                          | `list[Annotation]`     | All annotations for one entry.                          |
+| `for_dataset(dataset_id)`                                                                      | `list[Annotation]`     | All annotations across a dataset.                       |
+| `iter_for_dataset(dataset_id, *, batch_size)`                                                  | `Iterator[Annotation]` | Streaming, batched.                                     |
+| `all()`                                                                                        | `list[Annotation]`     | Every annotation.                                       |
+| `count_for_dataset(dataset_id)`                                                                | `int`                  | Annotation count for a dataset.                         |
+| `update(id, *, shape_type, shape_args, annotation, metadata, qc_status)`                       | `Annotation \| None`   | Partial update.                                         |
+| `delete(id)`                                                                                   | `bool`                 | Delete by PK.                                           |
+| `delete_for_entry(entry_id)`                                                                   | `int`                  | Delete all annotations for an entry. Returns count.     |
+| `delete_for_dataset(dataset_id)`                                                               | `int`                  | Delete all annotations across a dataset. Returns count. |
 
 ```python
 ann = upd.annotations.create(
@@ -319,9 +329,17 @@ ann = upd.annotations.create(
 )
 
 upd.annotations.update(ann.id, qc_status="Flagged")
+
+# Scoped count via ibis
+n = upd.annotations.filter(
+    upd.annotations.entry_id == entry.id
+).count().execute()
+
+# All annotations for one entry (typed list)
+anns = upd.annotations.for_entry(entry.id)
 ```
 
-**`Annotation` dataclass**
+**`Annotation`**
 
 ```python
 @dataclass
@@ -336,28 +354,19 @@ class Annotation:
 
 ---
 
-## Querying
+## Querying with ibis
 
-Every repository inherits `_BaseRepository`, which delegates unknown attribute
-lookups to the underlying ibis table expression.
+Every repository delegates unknown attributes to its ibis table expression,
+so the full ibis query API is available directly:
 
 ```python
-with UPD.open("my_dataset.upd") as upd:
+with UPD.open("file.upd") as upd:
 
-    # ── .table gives you the base expression to build predicates from ─────
-    t  = upd.datasets.table
-    df = t.filter(t.modality == "image").execute()
-
-    # ── .filter(predicate) is a direct shorthand — result is chainable ────
-    t  = upd.entries.table
-    df = upd.entries.filter(t.dataset_id == ds.id).execute()
-
-    # ── Any operation works directly on the repo ──────────────────────────
-    df = upd.annotations.select("id", "shape_type", "annotation").execute()
-    df = upd.datasets.order_by("name").limit(10).execute()
-
-    # ── Full expressive chains ────────────────────────────────────────────
+    # Predicate from .table
     t  = upd.annotations.table
+    df = upd.annotations.filter(t.shape_type == "bounding-box").execute()
+
+    # Full chain
     df = (
         upd.annotations
            .filter(t.shape_type == "bounding-box")
@@ -367,8 +376,7 @@ with UPD.open("my_dataset.upd") as upd:
            .execute()
     )
 
-    # ── Group-by / aggregate ──────────────────────────────────────────────
-    t  = upd.annotations.table
+    # Group-by / aggregate
     df = (
         upd.annotations
            .group_by("shape_type")
@@ -377,325 +385,158 @@ with UPD.open("my_dataset.upd") as upd:
            .execute()
     )
 
-    # ── Join across tables ────────────────────────────────────────────────
+    # Join — use .table on the right-hand side (ibis type requirement)
     e  = upd.entries.table
     a  = upd.annotations.table
     df = (
-        e
-        .join(a, e.id == a.entry_id)
-        .filter(e.dataset_id == ds.id)
-        .select(e.id.name("entry_id"), a.shape_type, a.annotation)
-        .execute()
+        e.join(a, e.id == a.entry_id)
+         .filter(e.dataset_id == ds.id)
+         .select(e.id.name("entry_id"), a.shape_type, a.annotation)
+         .execute()
     )
 
-    # ── Raw SQL for JSON extraction, Flavor tables, complex sub-queries ───
+    # Semi-join (filter without exposing joined columns)
+    e = upd.entries.table
+    a = upd.annotations.table
+    df = (
+        a.semi_join(e.filter(e.dataset_id == ds.id), a.entry_id == e.id)
+         .execute()
+    )
+
+    # Scoped count
+    n = upd.entries.filter(
+        upd.entries.dataset_id == ds.id
+    ).count().execute()
+
+    # Raw SQL for JSON extraction or Flavor-specific tables
     df = upd.raw_connection.execute("""
         SELECT id,
                json_extract_string(annotation, '$.class')      AS class_name,
-               json_extract_string(annotation, '$.confidence') AS confidence
+               CAST(json_extract_string(annotation, '$.confidence') AS DOUBLE) AS confidence
         FROM   annotations
-        WHERE  json_extract_string(annotation, '$.confidence')::DOUBLE > 0.9
+        WHERE  CAST(json_extract_string(annotation, '$.confidence') AS DOUBLE) > 0.9
     """).df()
 ```
 
 ---
 
-## UPD Schema Overview
+## On dataclasses and ibis results
 
-```
-metadata          ← global key/value config (Schema-Type, Schema-Version, …)
-│
-datasets          ← logical dataset groupings (name, modality, …)
-│   │
-│   └── entries   ← one row per data point (media_url → local or external)
-│           │
-│           └── annotations  ← shapes + labels for each entry
-│
-medias            ← binary blobs, composite PK (id, key)
-```
+The library returns **dataclasses** (`Dataset`, `Entry`, `Annotation`, `Media`)
+from write operations and typed read helpers, and **pandas DataFrames** from
+ibis expressions. These serve different purposes:
 
-All primary keys use **UUIDv7** (timestamp-ordered, via `uuid.uuid7()` in
-Python 3.14) for full lifecycle traceability. All JSON fields are stored as
-`VARCHAR` for maximum DuckDB compatibility.
+| Situation                                                                       | Use                            |
+| ------------------------------------------------------------------------------- | ------------------------------ |
+| After `create()` / `update()` — need the new row's id or properties immediately | Dataclass                      |
+| Iterating entries in an ML loop — `entry.local_media_id`, `entry.is_local`      | Dataclass (`iter_for_dataset`) |
+| Any filter, aggregation, join, or subquery                                      | ibis → DataFrame               |
+| Passing data into a further ibis expression                                     | ibis → DataFrame               |
 
-For the complete schema specification, see [RFC.md](./RFC.md).
+The list-returning methods (`for_entry`, `for_dataset`, `all`) are convenience
+wrappers for simple lookups. For anything more complex — filters, counts,
+joins — use the ibis query API directly.
 
 ---
 
-## Running Tests
+## Schema overview
+
+```
+metadata          ← file-level key/value config (Schema-Type, Schema-Version, …)
+
+datasets          ← logical groupings (name, modality)
+  └── entries     ← one row per data point (dataset_id FK, media_url)
+        └── annotations ← shapes + labels (entry_id FK, shape_type, shape_args, annotation)
+
+medias            ← binary blobs, composite PK (id, key)
+```
+
+All primary keys use **UUIDv7** (`uuid.uuid7()`, Python 3.14 stdlib) for
+timestamp-ordered, globally unique identifiers. All JSON fields are stored
+as `VARCHAR` for maximum DuckDB compatibility.
+
+Foreign keys use `ON DELETE RESTRICT` — use `upd.delete_dataset()` or the
+individual `delete_for_*` methods to remove rows in the correct order.
+
+---
+
+## Running tests
 
 ```bash
 pip install -e ".[dev]"
 pytest
 pytest --cov=upd --cov-report=term-missing
-pytest tests/test_annotation.py -v
+pytest tests/test_annotation.py -v   # single module
 ```
-
-| Test file                  | Source file         |
-| -------------------------- | ------------------- |
-| `tests/test_metadata.py`   | `upd/metadata.py`   |
-| `tests/test_dataset.py`    | `upd/dataset.py`    |
-| `tests/test_media.py`      | `upd/media.py`      |
-| `tests/test_entry.py`      | `upd/entry.py`      |
-| `tests/test_annotation.py` | `upd/annotation.py` |
 
 ---
 
-## Examples
-
-Both examples use a standard library to handle the dataset download and
-expose items as Python objects
+## Dataset conversion examples
 
 ```bash
-pip install torchvision   # MNIST
-pip install ultralytics   # COCO8
+pip install "upd[examples]"   # torchvision + ultralytics
 ```
 
 ### MNIST → UPD
 
-`torchvision` downloads MNIST and returns each item as a PIL image + integer
-label. The example converts those directly into UPD entries.
-
 ```bash
 python examples/mnist_to_upd.py --output mnist.upd
-python examples/mnist_to_upd.py --output mnist.upd --limit 500   # quick test
+python examples/mnist_to_upd.py --output mnist.upd --limit 500  # quick test
 ```
 
-| Entity      | Count (full) | Details                                          |
-| ----------- | ------------ | ------------------------------------------------ |
-| datasets    | 2            | "MNIST Train", "MNIST Test"                      |
-| medias      | 70,000       | PNG blobs, 28×28 grayscale                       |
-| entries     | 70,000       | `local:<uuid>` links                             |
-| annotations | 70,000       | `shape_type = "mnist:classification"`, label 0–9 |
-
-```python
-# Re-open and query
-from upd import UPD
-
-with UPD.open("mnist.upd") as upd:
-    t  = upd.annotations.table
-    df = upd.raw_connection.execute("""
-        SELECT json_extract_string(annotation, '$.label') AS digit, count(*) AS n
-        FROM   annotations GROUP BY digit ORDER BY digit
-    """).df()
-    print(df)
-```
-
----
-
-### training from MNIST UPD
-
-**Script:** `train_mnist_cnn.py`
-**Dataset:** `mnist.upd` (generated by `mnist_to_upd.py`)
-**Framework:** PyTorch
-**Concept:** Training a model from scratch
-
-#### What it does
-
-MNIST is the "hello world" of machine learning — 70 000 grayscale images of
-handwritten digits (0–9), each 28×28 pixels. The task is to classify each
-image into one of 10 digit classes.
-
-The script loads images and labels directly from the UPD file, trains a small
-convolutional neural network (CNN), and reports test accuracy.
-
-#### How to run
-
-```bash
-# 1. Generate the dataset
-python mnist_to_upd.py --output mnist.upd
-
-# 2. Train
-python examples/train_mnist_cnn.py --upd mnist.upd
-
-# 3. Optional — tweak
-python examples/train_mnist_cnn.py --upd mnist.upd --epochs 10 --batch-size 128
-```
-
-Expected output (5 epochs):
-
-```
-Epoch 1/5 — loss: 0.2341 — accuracy: 0.9301 — val_accuracy: 0.9782
-Epoch 2/5 — loss: 0.0721 — accuracy: 0.9782 — val_accuracy: 0.9851
-...
-Test accuracy : 98.43%
-Model saved → mnist_cnn.pt
-```
-
----
-
-### MNIST inference with the trained CNN (inference + round-trip)
-
-**Script:** `infer_mnist_cnn.py`
-**Dataset:** `mnist.upd` (generated by `mnist_to_upd.py`)
-**Framework:** PyTorch
-**Concept:** Running a trained model on new data + writing predictions back to UPD
-
-#### What it does
-
-Once a model is trained, the typical next step is to run it on new data and
-store the results somewhere useful. This script reads every image from the
-UPD file, runs the CNN trained by `train_mnist_cnn.py`, and writes each
-prediction back into the same file as a new annotation.
-
-After it runs, `mnist.upd` contains two annotation types per entry:
-
-| `shape_type`               | Written by           | Content                                         |
-| -------------------------- | -------------------- | ----------------------------------------------- |
-| `mnist:classification`     | `mnist_to_upd.py`    | ground-truth digit label                        |
-| `mnist-cnn:classification` | `infer_mnist_cnn.py` | predicted label + confidence + per-class scores |
-
-Both are queryable with the same API. The script then demonstrates this
-by joining them to report mistakes and low-confidence predictions.
-
-#### How to run
-
-```bash
-# 1. Generate the UPD file
-python mnist_to_upd.py --output mnist.upd
-
-# 2. Train the model
-python examples/train_mnist_cnn.py --upd mnist.upd --output mnist_cnn.pt
-
-# 3. Run inference and write predictions back
-python examples/infer_mnist_cnn.py --upd mnist.upd --model mnist_cnn.pt
-
-# 4. Optionally run on the training split too
-python examples/infer_mnist_cnn.py --upd mnist.upd --model mnist_cnn.pt --split "MNIST Train"
-```
-
-Expected output:
-
-```
-PyTorch 2.x.x  |  device: cpu
-Loading model from mnist_cnn.pt …
-Model loaded.
-
-  MNIST Test: 10000 images, accuracy 9843/10000 (98.43%)
-
-── Stored predictions (ibis query) ────────────────────────────
-Total predictions stored : 10000
-
-Mistakes (157):
-  Entry       GT    Pred      Conf
-  ----------------------------------
-  0a3f21b8…    5       3    0.7201
-  1c88fa02…    4       9    0.8834
-  ...
-
-Low-confidence predictions (<0.90) — (312):
-  Entry       Pred      Conf
-  ----------------------------
-  3d09ab12…     8    0.5123
-  ...
-```
-
----
+| Table       | Rows (full) | Detail                                           |
+| ----------- | ----------- | ------------------------------------------------ |
+| datasets    | 2           | "MNIST Train", "MNIST Test"                      |
+| medias      | 70 000      | PNG blobs, 28×28 grayscale                       |
+| entries     | 70 000      | `local:<uuid>` links                             |
+| annotations | 70 000      | `shape_type = "mnist:classification"`, label 0–9 |
 
 ### COCO8 → UPD
-
-`ultralytics` downloads COCO8 on first run and exposes each item as a numpy
-image array with class IDs and normalised bounding boxes.
 
 ```bash
 python examples/coco8_to_upd.py --output coco8.upd
 ```
 
-| Entity      | Count | Details                                   |
-| ----------- | ----- | ----------------------------------------- |
-| datasets    | 2     | "COCO8 Train", "COCO8 Val"                |
-| medias      | 8     | JPEG blobs                                |
-| entries     | 8     | `local:<uuid>` links                      |
-| annotations | ~30   | `shape_type = "coco8-image:bounding-box"` |
-
-```python
-# Re-open and query
-from upd import UPD
-
-with UPD.open("coco8.upd") as upd:
-    t  = upd.annotations.table
-    df = upd.annotations.group_by("shape_type").aggregate(n=t.id.count()).execute()
-    print(df)
-```
+| Table       | Rows | Detail                                                          |
+| ----------- | ---- | --------------------------------------------------------------- |
+| datasets    | 2    | "COCO8 Train", "COCO8 Val"                                      |
+| medias      | 8    | JPEG blobs                                                      |
+| entries     | 8    | `local:<uuid>` links                                            |
+| annotations | ~30  | `shape_type = "coco8-image:bounding-box"`, cx/cy/w/h normalised |
 
 ---
 
-### COCO8 object detection with YOLOv8 (inference + round-trip)
+## ML examples
 
-**Script:** `infer_coco8_yolo.py`
-**Dataset:** `coco8.upd` (generated by `coco8_to_upd.py`)
-**Framework:** Ultralytics YOLOv8
-**Concept:** Inference with a pre-trained model + writing predictions back to UPD
+See [`examples/README.md`](examples/README.md) for full explanations.
 
-#### What it does
-
-Object detection is harder than classification: the model must find _where_
-each object is (a bounding box) and _what_ it is (a class label), and there
-can be many objects per image.
-
-COCO8 contains only 8 images — it exists as a quick smoke-test, not a
-training set. The right approach for a dataset this small is to use a model
-already trained on the full COCO dataset (118 000 images, 80 classes) and run
-it on these images.
-
-The script demonstrates the UPD **round-trip pattern** using trained yolo model
-
-```
-coco8.upd
-  read images →  YOLOv8 →  predicted boxes + classes + confidence scores
-                                    │
-                                    ▼
-                         write back to coco8.upd as new annotations
-                                    │
-                                    ▼
-                         query predictions with ibis  (same API as ground truth)
-```
-
-After the script runs, `coco8.upd` contains both the original ground-truth
-annotations (written by `coco8_to_upd.py`, shape_type
-`"coco8-image:bounding-box"`) and the model's predictions (shape_type
-`"yolov8:bounding-box"`). You can query, compare, and filter both with the
-same API.
-
-The vendor-prefixed `shape_type = "yolov8:bounding-box"` keeps predictions
-distinguishable from ground-truth boxes so you can filter on one, the other,
-or both.
-
-#### How to run
+### Example 1 — Train a CNN on MNIST (PyTorch)
 
 ```bash
-# 1. Generate the dataset
-python coco8_to_upd.py --output coco8.upd
+python examples/train_mnist_cnn.py --upd mnist.upd
+python examples/train_mnist_cnn.py --upd mnist.upd --epochs 10 --output mnist_cnn.pt
+```
 
-# 2. Run inference and write predictions back
+Trains a small convolutional network (~98% test accuracy in 5 epochs).
+Demonstrates reading BLOBs and labels from UPD into a `torch.utils.data.Dataset`.
+
+### Example 2 — Run inference and write predictions back (MNIST)
+
+```bash
+python examples/infer_mnist_cnn.py --upd mnist.upd --model mnist_cnn.pt
+```
+
+Reads images from UPD, runs the trained model, writes predicted labels back
+as `shape_type = "mnist-cnn:classification"` annotations alongside the
+original ground truth. Shows the **round-trip pattern**: UPD as both source
+and destination.
+
+### Example 3 — YOLOv8 inference on COCO8
+
+```bash
 python examples/infer_coco8_yolo.py --upd coco8.upd
-
-# 3. Optional — stricter confidence filter or larger model
-python examples/infer_coco8_yolo.py --upd coco8.upd --conf 0.4 --model yolov8s.pt
 ```
 
-Expected output:
-
-```
-Loading model yolov8n.pt …
-Model loaded (80 classes)
-
-── Running inference on: COCO8 Train ──
-  COCO8 Train — 000002d3… : 3 prediction(s)
-  COCO8 Train — 0000048b… : 5 prediction(s)
-  ...
-
-Done. 8 images → 27 predictions stored in coco8.upd
-
-── Stored predictions (ibis query) ────────────────────────────
-Total predictions stored : 27
-
-Class                Confidence
---------------------------------
-person                    0.9201
-dog                       0.8734
-car                       0.7102
-...
-```
-
----
+Uses a pre-trained YOLOv8n model (no training needed — COCO8 is too small).
+Writes predicted bounding boxes back as `shape_type = "yolov8:bounding-box"`
+annotations, then queries them with ibis alongside the original ground-truth boxes.

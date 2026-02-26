@@ -315,3 +315,19 @@ class EntryRepository(_BaseRepository):
         ).fetchone()
         self._conn.commit()
         return result is not None
+
+    def delete_for_dataset(self, dataset_id: str) -> int:
+        """
+        Delete all entries belonging to *dataset_id*.  Returns the count removed.
+
+        .. note::
+            Raises a database error if any annotations still reference these
+            entries (``ON DELETE RESTRICT``).  Call
+            :meth:`AnnotationRepository.delete_for_dataset` first, or use
+            :meth:`UPD.delete_dataset` to handle the full cascade automatically.
+        """
+        rows = self._conn.execute(
+            "DELETE FROM entries WHERE dataset_id = ? RETURNING id", [dataset_id]
+        ).fetchall()
+        self._conn.commit()
+        return len(rows)

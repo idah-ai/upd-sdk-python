@@ -133,6 +133,30 @@ class UPD:
         """Execute arbitrary SQL against the UPD file."""
         return self._conn.execute(sql, params or [])
 
+    def delete_dataset(self, dataset_id: str) -> bool:
+        """
+        Delete a dataset and everything beneath it in the correct FK order.
+
+        Cascade order
+        -------------
+        1. All annotations whose entry belongs to *dataset_id*
+           (:meth:`AnnotationRepository.delete_for_dataset`)
+        2. All entries belonging to *dataset_id*
+           (:meth:`EntryRepository.delete_for_dataset`)
+        3. The dataset row itself
+           (:meth:`DatasetRepository.delete`)
+
+        Returns
+        -------
+        bool
+            ``True`` if the dataset existed and was deleted, ``False`` if
+            *dataset_id* was not found (child rows are still cleaned up
+            if they somehow exist without a parent).
+        """
+        self.annotations.delete_for_dataset(dataset_id)
+        self.entries.delete_for_dataset(dataset_id)
+        return self.datasets.delete(dataset_id)
+
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
