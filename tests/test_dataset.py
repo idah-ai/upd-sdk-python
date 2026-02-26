@@ -147,3 +147,56 @@ class TestDatasetDelete:
         upd.entries.create(dataset_id=ds.id, media_url="https://example.com/x")
         with pytest.raises(Exception):   # ON DELETE RESTRICT
             upd.datasets.delete(ds.id)
+
+class TestDatasetCascadeDelete:
+    """Tests for UPD.delete_dataset() — the facade-level cascade helper."""
+
+    def _populate(self, upd, ds):
+        """Create 2 entries with 2 annotations each under *ds*."""
+        entries = [
+            upd.entries.create(dataset_id=ds.id, media_url=f"https://example.com/{i}")
+            for i in range(2)
+        ]
+        for e in entries:
+            upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, annotation={})
+            upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, annotation={})
+        return entries
+
+    def test_delete_dataset_returns_true(self, upd):
+        ds = upd.datasets.create(name="DS", modality="m")
+        self._populate(upd, ds)
+        assert upd.delete_dataset(ds.id) is True
+
+    def test_delete_dataset_removes_dataset_row(self, upd):
+        ds = upd.datasets.create(name="DS", modality="m")
+        self._populate(upd, ds)
+        upd.delete_dataset(ds.id)
+        assert upd.datasets.get(ds.id) is None
+
+    def test_delete_dataset_removes_all_entries(self, upd):
+        ds = upd.datasets.create(name="DS", modality="m")
+        self._populate(upd, ds)
+        upd.delete_dataset(ds.id)
+        assert upd.entries.for_dataset(ds.id) == []
+
+    def test_delete_dataset_removes_all_annotations(self, upd):
+        ds = upd.datasets.create(name="DS", modality="m")
+        self._populate(upd, ds)
+        upd.delete_dataset(ds.id)
+        assert upd.annotations.count_for_dataset(ds.id) == 0
+
+    def test_delete_dataset_returns_false_when_not_found(self, upd):
+        assert upd.delete_dataset("nonexistent") is False
+
+    def test_delete_dataset_isolates_other_datasets(self, upd):
+        """Rows belonging to other datasets must be untouched."""
+        ds1 = upd.datasets.create(name="DS1", modality="m")
+        ds2 = upd.datasets.create(name="DS2", modality="m")
+        self._populate(upd, ds1)
+        entries2 = self._populate(upd, ds2)
+
+        upd.delete_dataset(ds1.id)
+
+        assert upd.datasets.get(ds2.id) is not None
+        assert len(upd.entries.for_dataset(ds2.id)) == 2
+        assert upd.annotations.count_for_dataset(ds2.id) == 4

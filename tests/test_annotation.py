@@ -231,3 +231,52 @@ class TestAnnotationDelete:
 
     def test_delete_missing_returns_false(self, upd):
         assert upd.annotations.delete("nonexistent") is False
+
+class TestAnnotationCountForDataset:
+    def test_count_for_dataset(self, upd, ds):
+        e1 = upd.entries.create(dataset_id=ds.id, media_url="https://a.com")
+        e2 = upd.entries.create(dataset_id=ds.id, media_url="https://b.com")
+        upd.annotations.create(entry_id=e1.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.create(entry_id=e1.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.create(entry_id=e2.id, shape_type="t", shape_args={}, annotation={})
+        assert upd.annotations.count_for_dataset(ds.id) == 3
+
+    def test_count_for_dataset_empty(self, upd, ds):
+        assert upd.annotations.count_for_dataset(ds.id) == 0
+
+    def test_count_for_dataset_isolates(self, upd):
+        ds1 = upd.datasets.create(name="DS1", modality="m")
+        ds2 = upd.datasets.create(name="DS2", modality="m")
+        e1  = upd.entries.create(dataset_id=ds1.id, media_url="https://a.com")
+        e2  = upd.entries.create(dataset_id=ds2.id, media_url="https://b.com")
+        upd.annotations.create(entry_id=e1.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.create(entry_id=e2.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.create(entry_id=e2.id, shape_type="t", shape_args={}, annotation={})
+        assert upd.annotations.count_for_dataset(ds1.id) == 1
+        assert upd.annotations.count_for_dataset(ds2.id) == 2
+
+
+class TestAnnotationDeleteForDataset:
+    def test_delete_for_dataset_removes_all(self, upd, ds):
+        e1 = upd.entries.create(dataset_id=ds.id, media_url="https://a.com")
+        e2 = upd.entries.create(dataset_id=ds.id, media_url="https://b.com")
+        upd.annotations.create(entry_id=e1.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.create(entry_id=e1.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.create(entry_id=e2.id, shape_type="t", shape_args={}, annotation={})
+        assert upd.annotations.delete_for_dataset(ds.id) == 3
+        assert upd.annotations.count_for_dataset(ds.id) == 0
+
+    def test_delete_for_dataset_returns_zero_when_empty(self, upd, ds):
+        assert upd.annotations.delete_for_dataset(ds.id) == 0
+
+    def test_delete_for_dataset_isolates(self, upd):
+        """Annotations from other datasets must not be affected."""
+        ds1 = upd.datasets.create(name="DS1", modality="m")
+        ds2 = upd.datasets.create(name="DS2", modality="m")
+        e1  = upd.entries.create(dataset_id=ds1.id, media_url="https://a.com")
+        e2  = upd.entries.create(dataset_id=ds2.id, media_url="https://b.com")
+        upd.annotations.create(entry_id=e1.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.create(entry_id=e2.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.delete_for_dataset(ds1.id)
+        assert upd.annotations.count_for_dataset(ds1.id) == 0
+        assert upd.annotations.count_for_dataset(ds2.id) == 1

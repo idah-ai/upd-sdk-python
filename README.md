@@ -508,8 +508,6 @@ python examples/coco8_to_upd.py --output coco8.upd
 
 ## ML examples
 
-See [`examples/README.md`](examples/README.md) for full explanations.
-
 ### Example 1 — Train a CNN on MNIST (PyTorch)
 
 ```bash

@@ -163,3 +163,31 @@ class TestEntryDelete:
 
     def test_delete_missing_returns_false(self, upd):
         assert upd.entries.delete("nonexistent") is False
+
+class TestEntryDeleteForDataset:
+    def test_delete_for_dataset_removes_all(self, upd, ds):
+        upd.entries.create(dataset_id=ds.id, media_url="https://a.com")
+        upd.entries.create(dataset_id=ds.id, media_url="https://b.com")
+        upd.entries.create(dataset_id=ds.id, media_url="https://c.com")
+        assert upd.entries.delete_for_dataset(ds.id) == 3
+        assert upd.entries.for_dataset(ds.id) == []
+
+    def test_delete_for_dataset_returns_zero_when_empty(self, upd, ds):
+        assert upd.entries.delete_for_dataset(ds.id) == 0
+
+    def test_delete_for_dataset_isolates(self, upd):
+        """Entries from other datasets must not be affected."""
+        ds1 = upd.datasets.create(name="DS1", modality="m")
+        ds2 = upd.datasets.create(name="DS2", modality="m")
+        upd.entries.create(dataset_id=ds1.id, media_url="https://a.com")
+        upd.entries.create(dataset_id=ds2.id, media_url="https://b.com")
+        upd.entries.delete_for_dataset(ds1.id)
+        assert upd.entries.for_dataset(ds1.id) == []
+        assert len(upd.entries.for_dataset(ds2.id)) == 1
+
+    def test_delete_for_dataset_raises_if_annotations_exist(self, upd, ds):
+        """ON DELETE RESTRICT: annotations must be cleared first."""
+        e = upd.entries.create(dataset_id=ds.id, media_url="https://a.com")
+        upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, annotation={})
+        with pytest.raises(Exception):
+            upd.entries.delete_for_dataset(ds.id)
