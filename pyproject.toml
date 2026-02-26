@@ -33,6 +33,7 @@ dev = [
     "pytest-cov",
 ]
 examples = [
+    "torch",          # MNIST Training
     "torchvision",    # MNIST example
     "ultralytics",    # COCO8 example
 ]

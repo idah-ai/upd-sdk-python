@@ -89,7 +89,7 @@ def run(output: str, limit: int | None, data_dir: str) -> None:
 
         for ds in upd.datasets.all():
             n_entries = upd.entries.filter(upd.entries.dataset_id == ds.id).count().execute()
-            n_ann     = len(upd.annotations)
+            n_ann     = upd.annotations.count_for_dataset(ds.id)
             print(f"  {ds.name}: {n_entries} entries, {n_ann} annotations total")
 
     print(f"\nWritten: {output}")
