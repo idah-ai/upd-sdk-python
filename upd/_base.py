@@ -30,7 +30,7 @@ Examples
     df = (
         upd.annotations
            .filter(upd.annotations.shape_type == "image:bounding-box")
-           .select("id", "entry_id", "annotation")
+           .select("id", "entry_id", "category")
            .order_by("id")
            .execute()
     )

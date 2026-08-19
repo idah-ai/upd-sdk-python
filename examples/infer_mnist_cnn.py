@@ -113,7 +113,8 @@ def infer_dataset(
     For each image we create one annotation with:
         shape_type : "mnist-cnn:classification"
         shape_args : {}                               (no geometry for classification)
-        annotation : {"label": int, "confidence": float, "scores": [float × 10]}
+        category   : str(pred_label)
+        properties : {"confidence": float, "scores": [float × 10]}
         metadata   : {"model": "mnist_cnn", "QC-Status": "Predicted"}
 
     The ``scores`` list contains the softmax probability for each digit (0–9),
@@ -155,7 +156,7 @@ def infer_dataset(
         gt_anns = upd.annotations.for_entry(entry.id)
         gt_anns = [a for a in gt_anns if a.shape_type == "mnist:classification"]
         if gt_anns:
-            gt_label = int(gt_anns[0].annotation["label"])
+            gt_label = int(gt_anns[0].category)
             if pred_label == gt_label:
                 n_correct += 1
 
@@ -164,8 +165,8 @@ def infer_dataset(
             entry_id=entry.id,
             shape_type=PRED_SHAPE_TYPE,
             shape_args={},
-            annotation={
-                "label":      pred_label,
+            category=str(pred_label),
+            properties={
                 "confidence": round(confidence, 4),
                 "scores":     scores,
             },
@@ -216,15 +217,14 @@ def print_prediction_summary(upd: UPD) -> None:
 
     # Build a lookup: entry_id → ground-truth label.
     gt_by_entry = {
-        row["entry_id"]: json.loads(row["annotation"])["label"]
+        row["entry_id"]: int(row["category"])
         for _, row in gt_df.iterrows()
     }
 
     mistakes, low_conf = [], []
     for _, row in pred_df.iterrows():
-        ann        = json.loads(row["annotation"])
-        pred_label = ann["label"]
-        confidence = ann["confidence"]
+        pred_label = int(row["category"])
+        confidence = json.loads(row["properties"])["confidence"]
         gt_label   = gt_by_entry.get(row["entry_id"])
 
         if gt_label is not None and pred_label != gt_label:

@@ -74,7 +74,8 @@ def infer_dataset(
     For each detected object we create one annotation with:
         shape_type : "yolov8:bounding-box"
         shape_args : {"cx": …, "cy": …, "w": …, "h": …}   ← normalised [0,1]
-        annotation : {"class_id": …, "class_name": …, "confidence": …}
+        category   : class_name
+        properties : {"class_id": …, "confidence": …}
         metadata   : {"model": …, "QC-Status": "Predicted"}
 
     Coordinates are stored normalised (0–1 relative to image size) so they
@@ -128,9 +129,9 @@ def infer_dataset(
                 "entry_id":   entry.id,
                 "shape_type": PRED_SHAPE_TYPE,
                 "shape_args": {"cx": cx, "cy": cy, "w": w, "h": h},
-                "annotation": {
+                "category":   class_name,
+                "properties": {
                     "class_id":   class_id,
-                    "class_name": class_name,
                     "confidence": round(confidence, 4),
                 },
                 "metadata": {
@@ -175,7 +176,7 @@ def print_prediction_summary(upd: UPD) -> None:
     print(f"Total predictions stored : {total}")
 
     # Show all predictions with their confidence scores.
-    # annotation is stored as a JSON string — we parse it in Python.
+    # properties is stored as a JSON string — we parse it in Python.
     all_preds = upd.annotations.filter(
         upd.annotations.shape_type == PRED_SHAPE_TYPE
     ).execute()
@@ -184,11 +185,11 @@ def print_prediction_summary(upd: UPD) -> None:
         print("No predictions found.")
         return
 
-    # Parse the JSON annotation column and extract class names + confidence.
+    # Parse the JSON properties column and extract class names + confidence.
     rows = []
     for _, row in all_preds.iterrows():
-        ann = json.loads(row["annotation"])
-        rows.append((ann["class_name"], ann["confidence"]))
+        props = json.loads(row["properties"])
+        rows.append((row["category"], props["confidence"]))
 
     rows.sort(key=lambda x: -x[1])
     print(f"\n{'Class':<20} {'Confidence':>10}")

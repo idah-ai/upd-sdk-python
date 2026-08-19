@@ -60,7 +60,8 @@ with UPD.open("my_dataset.upd") as upd:
         entry_id=entry.id,
         shape_type="bounding-box",
         shape_args={"x": 10, "y": 20, "width": 100, "height": 80},
-        annotation={"class": "cat", "confidence": 0.95},
+        category="cat",
+        properties={"confidence": 0.95},
         qc_status="Passed",
     )
 
@@ -306,7 +307,7 @@ Structured labels for entries (RFC §3.6).
 
 | Method                                                                                         | Returns                | Description                                             |
 | ---------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------- |
-| `create(entry_id, shape_type, shape_args, annotation, *, id, metadata, created_by, qc_status)` | `Annotation`           | Insert.                                                 |
+| `create(entry_id, shape_type, shape_args, category, properties, *, id, metadata, created_by, qc_status)` | `Annotation`           | Insert.                                                 |
 | `bulk_create(annotations)`                                                                     | `list[Annotation]`     | Insert many in one transaction.                         |
 | `get(id)`                                                                                      | `Annotation \| None`   | Fetch by PK.                                            |
 | `for_entry(entry_id)`                                                                          | `list[Annotation]`     | All annotations for one entry.                          |
@@ -314,7 +315,7 @@ Structured labels for entries (RFC §3.6).
 | `iter_for_dataset(dataset_id, *, batch_size)`                                                  | `Iterator[Annotation]` | Streaming, batched.                                     |
 | `all()`                                                                                        | `list[Annotation]`     | Every annotation.                                       |
 | `count_for_dataset(dataset_id)`                                                                | `int`                  | Annotation count for a dataset.                         |
-| `update(id, *, shape_type, shape_args, annotation, metadata, qc_status)`                       | `Annotation \| None`   | Partial update.                                         |
+| `update(id, *, shape_type, shape_args, category, properties, metadata, qc_status)`                       | `Annotation \| None`   | Partial update.                                         |
 | `delete(id)`                                                                                   | `bool`                 | Delete by PK.                                           |
 | `delete_for_entry(entry_id)`                                                                   | `int`                  | Delete all annotations for an entry. Returns count.     |
 | `delete_for_dataset(dataset_id)`                                                               | `int`                  | Delete all annotations across a dataset. Returns count. |
@@ -324,7 +325,8 @@ ann = upd.annotations.create(
     entry_id=entry.id,
     shape_type="bounding-box",
     shape_args={"x": 10, "y": 20, "width": 50, "height": 30},
-    annotation={"class": "person", "confidence": 0.97},
+    category="person",
+    properties={"confidence": 0.97},
     qc_status="Passed",
 )
 
@@ -348,7 +350,8 @@ class Annotation:
     entry_id: str
     shape_type: str
     shape_args: dict[str, Any]
-    annotation: dict[str, Any]
+    category: str
+    properties: dict[str, Any]
     metadata: dict[str, Any]
 ```
 
@@ -370,7 +373,7 @@ with UPD.open("file.upd") as upd:
     df = (
         upd.annotations
            .filter(t.shape_type == "bounding-box")
-           .select("id", "entry_id", "annotation")
+           .select("id", "entry_id", "category")
            .order_by("id")
            .limit(100)
            .execute()
@@ -391,7 +394,7 @@ with UPD.open("file.upd") as upd:
     df = (
         e.join(a, e.id == a.entry_id)
          .filter(e.dataset_id == ds.id)
-         .select(e.id.name("entry_id"), a.shape_type, a.annotation)
+         .select(e.id.name("entry_id"), a.shape_type, a.category)
          .execute()
     )
 
@@ -411,10 +414,10 @@ with UPD.open("file.upd") as upd:
     # Raw SQL for JSON extraction or Flavor-specific tables
     df = upd.raw_connection.execute("""
         SELECT id,
-               json_extract_string(annotation, '$.class')      AS class_name,
-               CAST(json_extract_string(annotation, '$.confidence') AS DOUBLE) AS confidence
+               category AS class_name,
+               CAST(json_extract_string(properties, '$.confidence') AS DOUBLE) AS confidence
         FROM   annotations
-        WHERE  CAST(json_extract_string(annotation, '$.confidence') AS DOUBLE) > 0.9
+        WHERE  CAST(json_extract_string(properties, '$.confidence') AS DOUBLE) > 0.9
     """).df()
 ```
 
@@ -446,7 +449,7 @@ metadata          ← file-level key/value config (Schema-Type, Schema-Version, 
 
 datasets          ← logical groupings (name, modality)
   └── entries     ← one row per data point (dataset_id FK, media_url)
-        └── annotations ← shapes + labels (entry_id FK, shape_type, shape_args, annotation)
+        └── annotations ← shapes + labels (entry_id FK, shape_type, shape_args, category, properties)
 
 medias            ← binary blobs, composite PK (id, key)
 ```
