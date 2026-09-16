@@ -17,7 +17,7 @@ def upd():
 class TestMetadataGet:
     def test_required_keys_are_seeded(self, upd):
         assert upd.metadata.get("Schema-Type")    == "Universal Portable Dataset"
-        assert upd.metadata.get("Schema-Version") == "0.2"
+        assert upd.metadata.get("Schema-Version") == "1.0"
         assert upd.metadata.get("Schema-Flavor")  == "Vanilla"
 
     def test_get_missing_key_returns_none(self, upd):

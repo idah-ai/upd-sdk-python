@@ -113,9 +113,9 @@ def run(output: str) -> None:
                         "entry_id":   entry.id,
                         "shape_type": "coco8-image:bounding-box",
                         "shape_args": {"cx": cx, "cy": cy, "w": w, "h": h},
-                        "annotation": {
-                            "class_id":   cls_id,
-                            "class_name": COCO_CLASSES[cls_id] if cls_id < len(COCO_CLASSES) else str(cls_id),
+                        "category":   COCO_CLASSES[cls_id] if cls_id < len(COCO_CLASSES) else str(cls_id),
+                        "properties": {
+                            "class_id": cls_id,
                         },
                         "metadata": {"QC-Status": "Passed"},
                     })

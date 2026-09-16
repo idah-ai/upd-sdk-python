@@ -79,7 +79,8 @@ def run(output: str, limit: int | None, data_dir: str) -> None:
                     entry_id=entry.id,
                     shape_type="mnist:classification",
                     shape_args={},
-                    annotation={"label": int(label), "num_classes": 10},
+                    category=str(label),
+                    properties={"num_classes": 10},
                     metadata={"Created-By": "MNIST ground-truth", "QC-Status": "Passed"},
                 )
 

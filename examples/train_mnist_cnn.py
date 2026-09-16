@@ -87,7 +87,7 @@ class MNISTFromUPD(Dataset):
 
                 # Each MNIST entry has exactly one annotation: the digit label.
                 anns = upd.annotations.for_entry(entry.id)
-                self.labels.append(int(anns[0].annotation["label"]))
+                self.labels.append(int(anns[0].category))
 
     def __len__(self) -> int:
         return len(self.images)

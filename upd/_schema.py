@@ -1,7 +1,7 @@
 """
 UPD Core Schema SQL definitions.
 
-Contains the exact CREATE TABLE statements required by the UPD RFC 0.2 Beta.
+Contains the exact CREATE TABLE statements required by the UPD RFC 1.0.
 These statements are used both for database initialization and for schema
 hashing during digital signature operations.
 """
@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS annotations (
     entry_id   VARCHAR NOT NULL REFERENCES entries(id) ON DELETE RESTRICT,
     shape_type VARCHAR NOT NULL             CHECK(length(shape_type) <= 64),
     shape_args VARCHAR NOT NULL,
-    annotation VARCHAR NOT NULL,
+    category   VARCHAR NOT NULL,
+    properties VARCHAR NOT NULL DEFAULT '{}',
     metadata   VARCHAR DEFAULT '{}'
 )
 """.strip()
@@ -83,7 +84,7 @@ INITIALIZATION_STATEMENTS: list[str] = [
 # Required global metadata keys (RFC §3.2.1)
 REQUIRED_METADATA: dict[str, str] = {
     "Schema-Type":    '"Universal Portable Dataset"',
-    "Schema-Version": '"0.2"',
+    "Schema-Version": '"1.0"',
 }
 
 DEFAULT_METADATA: dict[str, str] = {

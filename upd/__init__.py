@@ -15,7 +15,8 @@ Quick Start
             entry_id=entry.id,
             shape_type="bounding-box",
             shape_args={"x": 10, "y": 20, "width": 100, "height": 80},
-            annotation={"class": "cat", "confidence": 0.95},
+            category="cat",
+            properties={"confidence": 0.95},
         )
 
         # Repositories are first-class query objects

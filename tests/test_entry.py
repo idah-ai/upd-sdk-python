@@ -157,7 +157,7 @@ class TestEntryDelete:
 
     def test_delete_with_annotations_raises(self, upd, ds):
         e = upd.entries.create(dataset_id=ds.id, media_url="https://x.com")
-        upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, category="c")
         with pytest.raises(Exception):   # ON DELETE RESTRICT
             upd.entries.delete(e.id)
 
@@ -188,6 +188,6 @@ class TestEntryDeleteForDataset:
     def test_delete_for_dataset_raises_if_annotations_exist(self, upd, ds):
         """ON DELETE RESTRICT: annotations must be cleared first."""
         e = upd.entries.create(dataset_id=ds.id, media_url="https://a.com")
-        upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, annotation={})
+        upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, category="c")
         with pytest.raises(Exception):
             upd.entries.delete_for_dataset(ds.id)

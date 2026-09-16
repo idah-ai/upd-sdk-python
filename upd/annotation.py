@@ -13,7 +13,7 @@ works directly on the repository object:
     df = (
         upd.annotations
            .filter(upd.annotations.entry_id == entry.id)
-           .select("id", "shape_type", "annotation")
+           .select("id", "shape_type", "category")
            .order_by("id")
            .execute()
     )
@@ -59,8 +59,10 @@ class Annotation:
         Vendor-prefixed geometry type (≤ 64 chars).
     shape_args : dict
         JSON geometry parameters (structure is shape_type-specific).
-    annotation : dict
-        JSON semantic payload (e.g. class label, confidence score).
+    category : str
+        Single classification string for the annotation (e.g. a class label).
+    properties : dict
+        Open JSON bag for any additional semantic payload.
     metadata : dict
         Lifecycle metadata.  Recommended keys: ``Created-At``,
         ``Created-By``, ``QC-Status``, ``Confidence``.
@@ -70,7 +72,8 @@ class Annotation:
     entry_id: str
     shape_type: str
     shape_args: dict[str, Any]
-    annotation: dict[str, Any]
+    category: str
+    properties: dict[str, Any]
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -80,7 +83,8 @@ class Annotation:
             entry_id=r["entry_id"],
             shape_type=r["shape_type"],
             shape_args=json_loads(r["shape_args"]),
-            annotation=json_loads(r["annotation"]),
+            category=r["category"],
+            properties=json_loads(r["properties"]),
             metadata=json_loads(r["metadata"]),
         )
 
@@ -108,7 +112,8 @@ class AnnotationRepository(_BaseRepository):
         entry_id: str,
         shape_type: str,
         shape_args: dict[str, Any],
-        annotation: dict[str, Any],
+        category: str,
+        properties: Optional[dict[str, Any]] = None,
         *,
         id: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -126,8 +131,10 @@ class AnnotationRepository(_BaseRepository):
             Vendor-prefixed shape identifier (≤ 64 chars).
         shape_args:
             JSON-serialisable dict describing the shape geometry.
-        annotation:
-            JSON-serialisable dict with semantic labels / scores.
+        category:
+            Single classification string for the annotation (e.g. a class label).
+        properties:
+            Optional JSON-serialisable dict with any additional semantic payload.
         id:
             Explicit primary key.  A UUIDv7 is generated when omitted.
         metadata:
@@ -144,6 +151,8 @@ class AnnotationRepository(_BaseRepository):
         validate_id(entry_id, field="entry_id")
         if len(shape_type) > 64:
             raise ValueError("shape_type must be ≤ 64 characters")
+        if not category or not isinstance(category, str):
+            raise ValueError("category must be a non-empty string")
         ann_id = id or new_id()
         validate_id(ann_id)
 
@@ -156,17 +165,19 @@ class AnnotationRepository(_BaseRepository):
         if qc_status:
             meta.setdefault("QC-Status", qc_status)
 
+        props = properties or {}
         self.insert([{
             "id":         ann_id,
             "entry_id":   entry_id,
             "shape_type": shape_type,
             "shape_args": json_dumps(shape_args),
-            "annotation": json_dumps(annotation),
+            "category":   category,
+            "properties": json_dumps(props),
             "metadata":   json_dumps(meta),
         }])
         return Annotation(
             id=ann_id, entry_id=entry_id, shape_type=shape_type,
-            shape_args=shape_args, annotation=annotation, metadata=meta,
+            shape_args=shape_args, category=category, properties=props, metadata=meta,
         )
 
     def bulk_create(self, annotations: list[dict[str, Any]]) -> list[Annotation]:
@@ -177,8 +188,8 @@ class AnnotationRepository(_BaseRepository):
         batches (one commit instead of N).
 
         Each dict must contain: ``entry_id``, ``shape_type``, ``shape_args``,
-        ``annotation``.  Optional keys: ``id``, ``metadata``, ``created_by``,
-        ``qc_status``.
+        ``category``.  Optional keys: ``properties``, ``id``, ``metadata``,
+        ``created_by``, ``qc_status``.
 
         Returns
         -------
@@ -197,6 +208,8 @@ class AnnotationRepository(_BaseRepository):
                 validate_id(row["entry_id"], field="entry_id")
                 if len(row["shape_type"]) > 64:
                     raise ValueError("shape_type must be ≤ 64 characters")
+                if not row.get("category") or not isinstance(row.get("category"), str):
+                    raise ValueError("category must be a non-empty string")
                 ann_id = row.get("id") or new_id()
                 validate_id(ann_id)
                 meta = dict(row.get("metadata") or {})
@@ -206,17 +219,19 @@ class AnnotationRepository(_BaseRepository):
                     meta.setdefault("Created-By", row["created_by"])
                 if row.get("qc_status"):
                     meta.setdefault("QC-Status", row["qc_status"])
+                props = row.get("properties") or {}
                 self._conn.execute(
                     "INSERT INTO annotations "
-                    "(id, entry_id, shape_type, shape_args, annotation, metadata) "
-                    "VALUES (?,?,?,?,?,?)",
+                    "(id, entry_id, shape_type, shape_args, category, properties, metadata) "
+                    "VALUES (?,?,?,?,?,?,?)",
                     [ann_id, row["entry_id"], row["shape_type"],
-                     json_dumps(row["shape_args"]), json_dumps(row["annotation"]),
-                     json_dumps(meta)],
+                     json_dumps(row["shape_args"]), row["category"],
+                     json_dumps(props), json_dumps(meta)],
                 )
                 results.append(Annotation(
                     id=ann_id, entry_id=row["entry_id"], shape_type=row["shape_type"],
-                    shape_args=row["shape_args"], annotation=row["annotation"], metadata=meta,
+                    shape_args=row["shape_args"], category=row["category"],
+                    properties=props, metadata=meta,
                 ))
             self._conn.execute("COMMIT")
         except Exception:
@@ -275,7 +290,7 @@ class AnnotationRepository(_BaseRepository):
         Preferred over :meth:`for_dataset` when iterating large datasets::
 
             for ann in upd.annotations.iter_for_dataset(ds.id):
-                process(ann.annotation)
+                process(ann.category)
 
         Note
         ----
@@ -286,7 +301,7 @@ class AnnotationRepository(_BaseRepository):
         while True:
             rows = self._conn.execute(
                 "SELECT a.id, a.entry_id, a.shape_type, a.shape_args, "
-                "       a.annotation, a.metadata "
+                "       a.category, a.properties, a.metadata "
                 "FROM annotations a "
                 "JOIN entries e ON a.entry_id = e.id "
                 "WHERE e.dataset_id = ? ORDER BY a.id "
@@ -295,11 +310,11 @@ class AnnotationRepository(_BaseRepository):
             ).fetchall()
             if not rows:
                 break
-            for id_, entry_id, shape_type, shape_args, annotation, meta in rows:
+            for id_, entry_id, shape_type, shape_args, category, properties, meta in rows:
                 yield Annotation(
                     id=id_, entry_id=entry_id, shape_type=shape_type,
-                    shape_args=json_loads(shape_args), annotation=json_loads(annotation),
-                    metadata=json_loads(meta),
+                    shape_args=json_loads(shape_args), category=category,
+                    properties=json_loads(properties), metadata=json_loads(meta),
                 )
             offset += batch_size
 
@@ -331,7 +346,8 @@ class AnnotationRepository(_BaseRepository):
         *,
         shape_type: Optional[str] = None,
         shape_args: Optional[dict[str, Any]] = None,
-        annotation: Optional[dict[str, Any]] = None,
+        category: Optional[str] = None,
+        properties: Optional[dict[str, Any]] = None,
         metadata: Optional[dict[str, Any]] = None,
         qc_status: Optional[str] = None,
     ) -> Optional[Annotation]:
@@ -346,10 +362,11 @@ class AnnotationRepository(_BaseRepository):
         if existing is None:
             return None
 
-        new_st   = shape_type if shape_type is not None else existing.shape_type
-        new_sa   = shape_args if shape_args is not None else existing.shape_args
-        new_ann  = annotation if annotation is not None else existing.annotation
-        new_meta = existing.metadata.copy()
+        new_st    = shape_type if shape_type is not None else existing.shape_type
+        new_sa    = shape_args if shape_args is not None else existing.shape_args
+        new_cat   = category if category is not None else existing.category
+        new_props = properties if properties is not None else existing.properties
+        new_meta  = existing.metadata.copy()
         if metadata is not None:
             new_meta.update(metadata)
         if qc_status is not None:
@@ -358,13 +375,15 @@ class AnnotationRepository(_BaseRepository):
 
         self._conn.execute(
             "UPDATE annotations "
-            "SET shape_type=?, shape_args=?, annotation=?, metadata=? WHERE id=?",
-            [new_st, json_dumps(new_sa), json_dumps(new_ann), json_dumps(new_meta), id],
+            "SET shape_type=?, shape_args=?, category=?, properties=?, metadata=? "
+            "WHERE id=?",
+            [new_st, json_dumps(new_sa), new_cat, json_dumps(new_props),
+             json_dumps(new_meta), id],
         )
         self._conn.commit()
         return Annotation(
             id=id, entry_id=existing.entry_id, shape_type=new_st,
-            shape_args=new_sa, annotation=new_ann, metadata=new_meta,
+            shape_args=new_sa, category=new_cat, properties=new_props, metadata=new_meta,
         )
 
     # ------------------------------------------------------------------

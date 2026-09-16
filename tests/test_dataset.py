@@ -158,8 +158,8 @@ class TestDatasetCascadeDelete:
             for i in range(2)
         ]
         for e in entries:
-            upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, annotation={})
-            upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, annotation={})
+            upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, category="c")
+            upd.annotations.create(entry_id=e.id, shape_type="t", shape_args={}, category="c")
         return entries
 
     def test_delete_dataset_returns_true(self, upd):
